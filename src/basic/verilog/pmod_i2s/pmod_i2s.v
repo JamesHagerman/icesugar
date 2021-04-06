@@ -49,6 +49,32 @@ module top(
 
 
 
+  // Try to build a sily sawtooth generator
+  reg [16:0] audioBuffer; // Actual audio data per sample
+  initial begin
+    audioBuffer = 0;
+  end
+
+  reg [8:0] currentBit; // Current bit in the audioBuffer
+  initial begin
+    currentBit = 0;
+  end
+
+//  assign P2_1 = currentBit[0];
+//  assign P2_2 = currentBit[1];
+//  assign P2_3 = currentBit[2];
+//  assign P2_4 = currentBit[3];
+
+
+  reg [8:0] sampleNumber; // Current sample number (max of 255 for bitbyte attempt)
+  initial begin
+    sampleNumber = 0;
+  end
+
+
+
+
+
   // Generate an arbitrary bit clock from the system clock
   // clk is 6MHz
   // We want a bit clock of something like sample rate * bit depth * # of channels
@@ -73,11 +99,20 @@ module top(
  
   //assign P1_11 = ~i2s_bck_state;
   assign P1_2 = ~i2s_bck_state;
+
+  //assign P1_10 = ~audioBuffer[currentBit]; // Audio
+  assign P1_3 = ~audioBuffer[currentBit]; // Audio
+
  
   always @(posedge bck_clk)
   begin
     i2s_bck_state = !i2s_bck_state;
+    currentBit <= currentBit + 1;
   end
+
+
+
+
 
 
 
@@ -103,46 +138,56 @@ module top(
     i2s_lrck_state = 0;
   end
 
-  //assign P1_9 = ~i2s_lrck_state[0]; // LRCK
-  assign P1_4 = ~i2s_lrck_state[0]; // LRCK
+  //assign P1_9 = ~i2s_lrck_state; // LRCK
+  assign P1_4 = ~i2s_lrck_state; // LRCK
 
   always @(posedge sample_rate_clk)
   begin
     i2s_lrck_state = !i2s_lrck_state;
+    //currentBit = 1;
+    audioBuffer <= audioBuffer + 1;
   end
 
-
-
-
-
-  // Generate an arbitrary I2S DIN audio wave form
-  // clk is 6MHz.  We want a 440Hz square wave
-  // TODO: This should probably be pinned to the sample rate so jitter there aligns with jitter here...
-  reg [24:0] audioCounter;
-  wire [24:0] audioInc = audioCounter[24] ? (440) : (440 - 6000000);
-  wire [24:0] audioN = audioCounter + audioInc;
-  always @(posedge clk)
+  // Every sample, increment the sampleNumber thingy
+  always @(posedge i2s_lrck_state)
   begin
-    audioCounter = audioN;
-  end
-  wire audio_waveform_clock = ~audioCounter[24];  // clock B tick whenever audioCounter[24] is zero
-
-
-  // Generate a simple square wave from the audio clock:
-  // DIN = P1_10   Whatever audio data we want
-  reg i2s_audio_state;
-
-  initial begin
-    i2s_audio_state = 0;
+    sampleNumber <= sampleNumber + 1;
   end
 
-  //assign P1_10 = ~i2s_audio_state[0]; // Audio
-  assign P1_3 = ~i2s_audio_state[0]; // Audio
 
-  always @(posedge audio_waveform_clock)
-  begin
-    i2s_audio_state = !i2s_audio_state;
-  end
+
+
+
+
+
+//  // Generate an arbitrary I2S DIN audio wave form
+//  // clk is 6MHz.  We want a 440Hz square wave
+//  // TODO: This should probably be pinned to the sample rate so jitter there aligns with jitter here...
+//  reg [24:0] audioCounter;
+//  wire [24:0] audioInc = audioCounter[24] ? (1000) : (1000 - 44100);
+//  wire [24:0] audioN = audioCounter + audioInc;
+//  always @(posedge sample_rate_clk)
+//  begin
+//    audioCounter = audioN;
+//  end
+//  wire audio_waveform_clock = ~audioCounter[24];  // clock B tick whenever audioCounter[24] is zero
+//
+//
+//  // Generate a simple square wave from the audio clock:
+//  // DIN = P1_10   Whatever audio data we want
+//  reg i2s_audio_state;
+//
+//  initial begin
+//    i2s_audio_state = 0;
+//  end
+//
+//  //assign P1_10 = ~i2s_audio_state; // Audio
+//  assign P1_3 = ~i2s_audio_state; // Audio
+//
+//  always @(posedge audio_waveform_clock)
+//  begin
+//    i2s_audio_state = !i2s_audio_state;
+//  end
 
 
 
