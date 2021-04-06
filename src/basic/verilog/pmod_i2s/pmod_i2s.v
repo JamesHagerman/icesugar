@@ -1,19 +1,34 @@
 // plug pmod-led on PMOD2 and pmod-switch on PMOD3
+//
 // Plug PCM5021 board into PMOD 1 pointing down into the table, VIN to the right corner, 
+// 
+// SCK - System clock input (NOT USED; tie low PLL on PCM5021 generates this based on BCK if it can)
+// BCK - Audio data bit clock input
+// DIN - Audio data input
+// LCK/LRCK - Audio data left-right clock/word select (Frequency is equivalent to the audio sample rate)
+//
+// Frequency of SCK 
 
 
-module i2s_tick #(parameter DATA_VALUE = 1) ( input [DATA_VALUE-1:0] some_data, output some_output );
-  assign some_output = !some_data;
-endmodule
+// module i2s_tick #(parameter DATA_VALUE = 1) ( input [DATA_VALUE-1:0] some_data, output some_output );
+//   assign some_output = !some_data;
+// 
+//   always @(posedge clk)
+//   begin
+//     counter 
+//   end
+// endmodule
 
-
-module switch(  input P3_1, input P3_2,  input P3_3,  input P3_4,
+module top(  
+                input clk,
+                input P3_1, input P3_2,  input P3_3,  input P3_4,
                 input P3_9, input P3_10, input P3_11, input P3_12,
 
                 output P2_1, output P2_2,  output P2_3,  output P2_4,
                 output P2_9, output P2_10, output P2_11, output P2_12,
 
-                output P1_9
+                output P1_4, output P1_3, output P1_2,
+                output P1_9, output P1_10, output P1_11
                 );
       
   assign P2_1 = !P3_1;
@@ -29,7 +44,110 @@ module switch(  input P3_1, input P3_2,  input P3_3,  input P3_4,
   // Turn on pin 9 on PMOD1 port
   //assign P1_9 = 1;
 
-  i2s_tick ticker(.some_data(1), .some_output(P1_9));
+  // Try using a module 
+  //i2s_tick ticker(.some_data(1), .some_output(P1_9));
+
+
+
+  // Generate an arbitrary bit clock from the system clock
+  // clk is 6MHz
+  // We want a bit clock of something like sample rate * bit depth * # of channels
+  // 44.1kHz * 16 * 2 = 1411200
+  reg [24:0] bckCounter;
+  wire [24:0] bckInc = bckCounter[24] ? (1411200) : (1411200 - 6000000);
+  wire [24:0] bckN = bckCounter + bckInc;
+  always @(posedge clk)
+  begin
+    bckCounter = bckN;
+  end
+  wire bck_clk = ~bckCounter[24];  // clock B tick whenever d[24] is zero
+
+
+  // Generate a clean I2S bit clock
+  // BCK = P1_11   This should probably be something like 44.1kHz * bit depth... 
+  reg i2s_bck_state;
+ 
+  initial begin
+    i2s_bck_state = 0;
+  end
+ 
+  //assign P1_11 = ~i2s_bck_state;
+  assign P1_2 = ~i2s_bck_state;
+ 
+  always @(posedge bck_clk)
+  begin
+    i2s_bck_state = !i2s_bck_state;
+  end
+
+
+
+
+
+  // Generate an arbitrary LRCK/sample rate clock from BCK
+  // clk is 1411200 Hz.  We want a 44100Hz sample rate (LRCK/word select clock) 
+  reg [24:0] d;
+  wire [24:0] dInc = d[24] ? (44100) : (44100 - 1411200);
+  wire [24:0] dN = d + dInc;
+  always @(posedge bck_clk)
+  begin
+    d = dN;
+  end
+  wire sample_rate_clk = ~d[24];  // clock B tick whenever d[24] is zero
+
+
+  // Generate a clean I2S LRCK from sample rate clock (sample_rate_clk wire)
+  // LRCK = P1_9   This should be 44.1kHz
+  reg i2s_lrck_state;
+
+  initial begin
+    i2s_lrck_state = 0;
+  end
+
+  //assign P1_9 = ~i2s_lrck_state[0]; // LRCK
+  assign P1_4 = ~i2s_lrck_state[0]; // LRCK
+
+  always @(posedge sample_rate_clk)
+  begin
+    i2s_lrck_state = !i2s_lrck_state;
+  end
+
+
+
+
+
+  // Generate an arbitrary I2S DIN audio wave form
+  // clk is 6MHz.  We want a 440Hz square wave
+  // TODO: This should probably be pinned to the sample rate so jitter there aligns with jitter here...
+  reg [24:0] audioCounter;
+  wire [24:0] audioInc = audioCounter[24] ? (440) : (440 - 6000000);
+  wire [24:0] audioN = audioCounter + audioInc;
+  always @(posedge clk)
+  begin
+    audioCounter = audioN;
+  end
+  wire audio_waveform_clock = ~audioCounter[24];  // clock B tick whenever audioCounter[24] is zero
+
+
+  // Generate a simple square wave from the audio clock:
+  // DIN = P1_10   Whatever audio data we want
+  reg i2s_audio_state;
+
+  initial begin
+    i2s_audio_state = 0;
+  end
+
+  //assign P1_10 = ~i2s_audio_state[0]; // Audio
+  assign P1_3 = ~i2s_audio_state[0]; // Audio
+
+  always @(posedge audio_waveform_clock)
+  begin
+    i2s_audio_state = !i2s_audio_state;
+  end
+
+
+
+
+  
 
 endmodule
 
