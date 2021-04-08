@@ -19,6 +19,21 @@
 //   end
 // endmodule
 
+
+// Usage: adjustableClock ticker(clk, 2, lclk);
+// second parameter is rate in hertz
+module adjustableClock ( input clk, input [7:0] hertz, output lclk );
+  reg [24:0] d;
+  wire [24:0] dInc = d[24] ? (hertz) : (hertz - 6000000);
+  wire [24:0] dN = d + dInc;
+  always @(posedge clk)
+  begin
+    d = dN;
+  end
+  assign lclk = ~d[24];  // clock tick whenever d[24] is zero
+endmodule
+
+
 module top(  
                 input clk,
                 input P3_1, input P3_2,  input P3_3,  input P3_4,
@@ -46,17 +61,27 @@ module top(
   // Make it a LOT easier to spit a byte to the LEDs:
   // NOTE: ~ inverts all bits to make a 1 be a powered LED
   reg [7:0] pmod_led_pins;
-  assign {P2_1, P2_2, P2_3, P2_4, P2_9, P2_10, P2_11, P2_12} = ~pmod_led_pins;
+  assign {P2_4, P2_3, P2_2, P2_1, P2_9, P2_10, P2_11, P2_12} = ~pmod_led_pins;
 
 
   // Create a test value to throw at our LEDs
   wire [7:0] byteForLEDs;
-  assign byteForLEDs = 12'h41;
+  //assign byteForLEDs = 12'h41;
 
 
   // Send our test byte to the PMOD LEDs!
   assign pmod_led_pins = byteForLEDs; 
 
+
+  reg [25:0] counter;
+  wire lclk = counter[22];
+
+  adjustableClock ticker(clk, 2, lclk);
+
+  always @(posedge lclk)
+  begin
+    byteForLEDs <= byteForLEDs + 1;
+  end
 
   // Turn on pin 9 on PMOD1 port
   //assign P1_9 = 1;
@@ -98,6 +123,7 @@ module top(
 
 
   // Generate an arbitrary bit clock from the system clock
+  // from: https://excamera.com/sphinx/vhdl-clock.html
   // clk is 6MHz
   // We want a bit clock of something like sample rate * bit depth * # of channels
   // 44.1kHz * 16 * 2 = 1411200
@@ -218,3 +244,69 @@ module top(
 
 endmodule
 
+
+
+
+
+
+// simple uart from: https://excamera.com/sphinx/fpga-uart.html#uart
+/*
+module uart(
+   // Outputs
+   uart_busy,   // High means UART is transmitting
+   uart_tx,     // UART transmit wire
+   // Inputs
+   uart_wr_i,   // Raise to transmit byte
+   uart_dat_i,  // 8-bit data
+   clk,   // System clock, 6 MHz
+   sys_rst_i    // System reset
+);
+
+  input uart_wr_i;
+  input [7:0] uart_dat_i;
+  input clk;
+  input sys_rst_i;
+
+  output uart_busy;
+  output uart_tx;
+
+  reg [3:0] bitcount;
+  reg [8:0] shifter;
+  reg uart_tx;
+
+  wire uart_busy = |bitcount[3:1];
+  wire sending = |bitcount;
+
+  // clk is 6MHz.  We want a 115200Hz clock
+
+  reg [28:0] d;
+  wire [28:0] dInc = d[28] ? (115200) : (115200 - 6000000);
+  wire [28:0] dNxt = d + dInc;
+  always @(posedge clk)
+  begin
+    d = dNxt;
+  end
+  wire ser_clk = ~d[28]; // this is the 115200 Hz clock
+
+  always @(posedge clk)
+  begin
+    if (sys_rst_i) begin
+      uart_tx <= 1;
+      bitcount <= 0;
+      shifter <= 0;
+    end else begin
+      // just got a new byte
+      if (uart_wr_i & ~uart_busy) begin
+        shifter <= { uart_dat_i[7:0], 1'h0 };
+        bitcount <= (1 + 8 + 2);
+      end
+
+      if (sending & ser_clk) begin
+        { shifter, uart_tx } <= { 1'h1, shifter };
+        bitcount <= bitcount - 1;
+      end
+    end
+  end
+
+endmodule
+*/
