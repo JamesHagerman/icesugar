@@ -31,7 +31,7 @@ module top(
                 output P1_9, output P1_10, output P1_11
                 );
       
-  assign P2_1 = !P3_1;
+/*  assign P2_1 = !P3_1;
   assign P2_2 = !P3_2;
   assign P2_3 = !P3_3;
   assign P2_4 = !P3_4;
@@ -41,11 +41,33 @@ module top(
   assign P2_11 = !P3_11;
   assign P2_12 = !P3_12;
 
+*/
+
+  // Make it a LOT easier to spit a byte to the LEDs:
+  // NOTE: ~ inverts all bits to make a 1 be a powered LED
+  reg [7:0] pmod_led_pins;
+  assign {P2_1, P2_2, P2_3, P2_4, P2_9, P2_10, P2_11, P2_12} = ~pmod_led_pins;
+
+
+  // Create a test value to throw at our LEDs
+  wire [7:0] byteForLEDs;
+  assign byteForLEDs = 12'h41;
+
+
+  // Send our test byte to the PMOD LEDs!
+  assign pmod_led_pins = byteForLEDs; 
+
+
   // Turn on pin 9 on PMOD1 port
   //assign P1_9 = 1;
 
   // Try using a module 
   //i2s_tick ticker(.some_data(1), .some_output(P1_9));
+
+
+
+
+/*
 
 
 
@@ -191,7 +213,7 @@ module top(
 
 
 
-
+*/
   
 
 endmodule
