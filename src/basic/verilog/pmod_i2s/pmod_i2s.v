@@ -20,8 +20,15 @@
 // endmodule
 
 
-// Usage: adjustableClock ticker(clk, 2, lclk);
-// second parameter is rate in hertz
+// Adjustable implementation of the arbitrary clock divider described here:
+//  https://excamera.com/sphinx/vhdl-clock.html
+//
+// Remember: These clocks "tick" in pulses, not edges. You may need additional logic to convert to edges
+//
+// Usage: adjustableClock ticker(clk, hertz, lclk);
+//  clk - the system clock input. This is assumed to be 6MHz
+//  hertz - tick rate in hertz
+//  lclk - The divided, lower frequency output
 module adjustableClock ( input clk, input [7:0] hertz, output lclk );
   reg [24:0] d;
   wire [24:0] dInc = d[24] ? (hertz) : (hertz - 6000000);
@@ -33,7 +40,8 @@ module adjustableClock ( input clk, input [7:0] hertz, output lclk );
   assign lclk = ~d[24];  // clock tick whenever d[24] is zero
 endmodule
 
-
+// The top module in the design. The "entry point", as it were...
+// TODO: This should probably be wrapped with a "stimulus" test harnass module of some kind. Or a dummy.
 module top(  
                 input clk,
 
@@ -48,7 +56,7 @@ module top(
                 // I2S "PMOD"
                 output P1_4, output P1_3, output P1_2, // "Top" row of PMOD1 works, bottom has strange behavior on BCK output
                 
-                // PMOD1 remaining pins
+                // PMOD1 remaining pins for debugging output
                 output P1_9
                 );
 
@@ -106,8 +114,9 @@ module top(
   // i2sOutput audio(clk, mockAudio, P1_4, P1_3, P1_2, pmod_led_pins);
 
   // Generate an audio waveform:
-  integer monoAudioData; // `integer` is a signed general purpose register data type (while `reg` stores unsigned values)
-  //assign monoAudioData = 0;
+  // integer monoAudioData; // `integer` is a signed general purpose register data type (while `reg` stores unsigned values)
+  reg signed [15:0] monoAudioData;
+  assign monoAudioData = 13; // 0b1101 = 13
 
   // We want a 440Hz square wave. System `clk` is 6MHz. 
   // TODO: This should probably be pinned to the sample rate so jitter there aligns with jitter here...
@@ -128,19 +137,13 @@ module top(
   always @(posedge audio_waveform_clock)
   begin
     i2s_audio_state = !i2s_audio_state;
-    P1_9 = i2s_audio_state;
-    monoAudioData = i2s_audio_state ? 0 : 1;
+    // P1_9 = i2s_audio_state; // debug output
+    // monoAudioData = i2s_audio_state ? 1 : 0;
+    P1_9 = monoAudioData[15]; // this is stupid
   end
-
-
 
   // Send 440Hz square wave to i2sOutput module instance:
   i2sOutput audio(clk, monoAudioData, P1_4, P1_3, P1_2, pmod_led_pins);
-
-
-
-
-
 
 endmodule
 
@@ -193,7 +196,7 @@ module i2sOutput(
   end
 
   // Bind something to the debug leds:
-  assign debugLEDs = audioData; 
+  assign debugLEDs = ~currentBit; 
 
 
 
@@ -218,6 +221,14 @@ module i2sOutput(
   //
   // This could be avoided by re-configuring the board for the left justified data format, but I don't want to do that.
   //
+  // Another issue is ensuring the data is set BEFORE the rising edge of BCK! This is part of the I2S spec and requires
+  // us to make sure things happen in sequence.
+  //
+  // This means we have another item in our list of reasons to speed up our BCK:
+  //  3. Timing of Data and BCK edges matter. Any delays in timing likely means we'll also be pushing past a channel boundary.
+  //
+  // Maybe this detail is exactly why I2S doesn't use left-justified data? Moving on...
+  //
   reg [24:0] bckCounter;
   wire [24:0] bckInc = bckCounter[24] ? (1411200) : (1411200 - 6000000);
   wire [24:0] bckN = bckCounter + bckInc;
@@ -227,26 +238,33 @@ module i2sOutput(
   end
   wire bck_clk = ~bckCounter[24];  // clock B tick whenever d[24] is zero
 
-  // Clean up the duty cycle of BCK...
+  // Convert bck_clk pulse chain into a toggling clock value for BCK output
   reg i2s_bck_state;
   initial begin
     i2s_bck_state = 0;
   end
   always @(posedge bck_clk)
   begin
-    i2s_bck_state = !i2s_bck_state;
+    // This is NOT the right place to increment the currentBit
+    i2s_bck_state <= !i2s_bck_state;
+  end
+
+  // The i2s_bck_state rises 16 times every frame
+  always @(negedge i2s_bck_state)
+  begin
     currentBit <= currentBit + 1;
   end
 
-  // Connect DIN output pin and send it the correct bit for the current frame 
-  assign P1_3 = audioData[currentBit]; // DIN
+  // Output the current bit value for this frame's sample on DIN pin:
+  // Because we need the data as MSB first, we subtract the current bit index from one less than the Bit Rate (15 in this case)
+  assign P1_3 = audioData[30-currentBit]; // DIN
 
-  // Output the BCK clock
-  // TODO: Timing probably matters here. Data should already be stable when BCK rises.
-  assign P1_2 = ~i2s_bck_state; // BCK
+  // Output BCK
+  assign P1_2 = i2s_bck_state; // BCK
 
 
   // Generate an arbitrary LCK/sample rate clock from BCK
+  // Remember: These clocks "tick" in pulses, not edges.
   //
   // We want a 44100Hz sample rate (LRCK/word select clock). And our BCK is 1411200 Hz.
   // When LCK is low, we're outputing the sample for the left channel. So falling edge represents moving to a new "frame"
@@ -259,17 +277,17 @@ module i2sOutput(
   end
   wire sample_rate_clk = ~d[24];  // clock B tick whenever d[24] is zero
 
-  // Equalize the duty cycle of the 44.1kHz LCK clock
-  // Remember: Rising edge means we should start outputting the bits for the Right channel sample.
+  // Convert pulse train to the expected LCK clock at the sample rate of 44.1 kHz
+  // Rising edge means we should start outputting the bits for the Right channel.
   reg i2s_lrck_state;
   initial begin
     i2s_lrck_state = 0;
   end
   always @(posedge sample_rate_clk)
   begin
-    i2s_lrck_state = !i2s_lrck_state;
-    //currentBit = 1;
-    audioBuffer <= audioBuffer + 1;
+    i2s_lrck_state <= !i2s_lrck_state;
+    //currentBit <= 1;
+    //audioBuffer <= audioBuffer + 1;
   end
 
   // Connect the clean 44.1kHz LCK to the correct output pin:
