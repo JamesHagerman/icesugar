@@ -116,7 +116,8 @@ module top(
   // Generate an audio waveform:
   // integer monoAudioData; // `integer` is a signed general purpose register data type (while `reg` stores unsigned values)
   reg signed [15:0] monoAudioData;
-  assign monoAudioData = 13; // 0b1101 = 13
+  //assign monoAudioData = 0;
+  // assign monoAudioData = 13; // Test value to help with MSB in the logic analyzer output: 0b1101 = 13
 
   // We want a 440Hz square wave. System `clk` is 6MHz. 
   // TODO: This should probably be pinned to the sample rate so jitter there aligns with jitter here...
@@ -137,9 +138,8 @@ module top(
   always @(posedge audio_waveform_clock)
   begin
     i2s_audio_state = !i2s_audio_state;
-    // P1_9 = i2s_audio_state; // debug output
-    // monoAudioData = i2s_audio_state ? 1 : 0;
-    P1_9 = monoAudioData[15]; // this is stupid
+    P1_9 = i2s_audio_state; // debug output
+    monoAudioData = i2s_audio_state ? 100 : 0;
   end
 
   // Send 440Hz square wave to i2sOutput module instance:
