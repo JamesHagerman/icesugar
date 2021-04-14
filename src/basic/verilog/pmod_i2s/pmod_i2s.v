@@ -26,18 +26,19 @@
 // Remember: These clocks "tick" in pulses, not edges. You may need additional logic to convert to edges
 //
 // Usage: adjustableClock ticker(clk, hertz, lclk);
-//  clk - the system clock input. This is assumed to be 6MHz
-//  hertz - tick rate in hertz
-//  lclk - The divided, lower frequency output
-module adjustableClock ( input clk, input [7:0] hertz, output lclk );
+//  sourceClock - The source clock input
+//  sourceFreqHz - The expected frequency of the source clock
+//  dividedFreqHz - Desired frqeuency of the divided clock
+//  dividedClock - The divided, lower frequency output
+module adjustableClock ( input sourceClock, input [24:0] sourceFreqHz, input [24:0] dividedFreqHz, output dividedClock );
   reg [24:0] d;
-  wire [24:0] dInc = d[24] ? (hertz) : (hertz - 6000000);
+  wire [24:0] dInc = d[24] ? (dividedFreqHz) : (dividedFreqHz - sourceFreqHz);
   wire [24:0] dN = d + dInc;
-  always @(posedge clk)
+  always @(posedge sourceClock)
   begin
     d = dN;
   end
-  assign lclk = ~d[24];  // clock tick whenever d[24] is zero
+  assign dividedClock = ~d[24];  // clock tick whenever d[24] is zero
 endmodule
 
 // The top module in the design. The "entry point", as it were...
@@ -114,96 +115,71 @@ module top(
   // i2sOutput audio(clk, mockAudio, P1_4, P1_3, P1_2, pmod_led_pins);
 
   // Generate an audio waveform:
-  // integer monoAudioData; // `integer` is a signed general purpose register data type (while `reg` stores unsigned values)
-  reg signed [15:0] monoAudioData;
-  //assign monoAudioData = 0;
-  // assign monoAudioData = 13; // Test value to help with MSB in the logic analyzer output: 0b1101 = 13
+  // integer squareWave; // `integer` is signed, but unsized. We need a 16 bit 2s complement signed value for samples.
+  reg signed [15:0] squareWave;
+  reg signed [15:0] squareWaveRight;
+  // assign squareWave = 13; // Test value to help with MSB in the logic analyzer output: 0b1101 = 13
+  // assign squareWave = -2; // Test value
 
-  // We want a 440Hz square wave. System `clk` is 6MHz. 
-  // TODO: This should probably be pinned to the sample rate so jitter there aligns with jitter here...
-  reg [24:0] audioCounter;
-  wire [24:0] audioInc = audioCounter[24] ? (440) : (440 - 6000000);
-  wire [24:0] audioN = audioCounter + audioInc;
-  always @(posedge clk)
-  begin
-    audioCounter = audioN;
-  end
-  wire audio_waveform_clock = ~audioCounter[24];  // clock B tick whenever audioCounter[24] is zero
+  // We want a 440Hz square wave. System `clk` is 6MHz.
+  wire audioRatePulses;
+  adjustableClock audioRateClock(clk, 6000000, 60, audioRatePulses);
+
+    // We want a 440Hz square wave. System `clk` is 6MHz.
+  wire audioRatePulsesRight;
+  adjustableClock audioRateClockRight(clk, 6000000, 61, audioRatePulsesRight);
 
   // Generate a simple square wave from the audio clock:
-  reg i2s_audio_state;
+  reg sqaureWaveState;
   initial begin
-    i2s_audio_state = 0;
+    sqaureWaveState = 0;
   end
-  always @(posedge audio_waveform_clock)
+  always @(posedge audioRatePulses)
   begin
-    i2s_audio_state = !i2s_audio_state;
-    P1_9 = i2s_audio_state; // debug output
-    monoAudioData = i2s_audio_state ? 100 : 0;
+    sqaureWaveState = !sqaureWaveState;
+    // TODO: Someday, actually manage volume of these samples:
+    // squareWave = sqaureWaveState ? 13 : -2;
+    squareWave = sqaureWaveState ? 5000 : -5000;
   end
 
-  // Send 440Hz square wave to i2sOutput module instance:
-  i2sOutput audio(clk, monoAudioData, P1_4, P1_3, P1_2, pmod_led_pins);
 
-endmodule
-
-
-//
-// I2S Output module
-//
-// This Verilog module was designed to work with the PCM5100 series audio DACs that can be found on cheap
-// breakout booards. By chance or design, the board I found happened to be compatible with the PMOD pin
-// layout.
-//
-// This module has not been tested with other I2S DACs but the Adafruit I2S Stereo Decoder (UDA1334A) has
-// a high chance of working. Note that the Adafruit board closely followed the datasheet reference design
-// and thus the filter values have been found to reduce the quality of the audio output.
-//
-// Here are the PCM5100 pins:
-//
-// VIN - 3.3v MAX!
-// GND - Analog and Digital grounds are tied together
-// LCK - Audio data left-right clock/frame/word select; Frequency should be the sample rate (e.g. 44.1kHz)
-// DIN - Audio data input; binary 2s complement, MSB-first, signed
-// BCK - Audio data bit clock; Frequnecy should be: Sample Rate * Bit Depth * 2 (e.g. 44.1kHz * 16 * 2)
-// SCK - System clock input; UNUSED!; tied low, the PCM5021 tries using BCK and a PLL to generate SCK
-//
-module i2sOutput(
-  input clk, // System clock at 6MHz
-  input [15:0] audioData, // binary 2s complement, MSB-first, signed, audio data
-  output P1_4, output P1_3, output P1_2, // I2C output pins; LCK, DIN, BCK respectively
-  output [7:0] debugLEDs // A register where we can drop some debugging output from the I2C module
-);
-
-  /////////////////
-  // START: - I2S attempts
-
-  // Try to build a sily sawtooth generator
-  reg [15:0] audioBuffer; // Actual audio data per sample
+  // Generate a simple square wave from the audio clock:
+  reg sqaureWaveStateRight;
   initial begin
-    audioBuffer = 0;
+    sqaureWaveStateRight = 0;
+  end
+  always @(posedge audioRatePulsesRight)
+  begin
+    sqaureWaveStateRight = !sqaureWaveStateRight;
+    squareWaveRight = sqaureWaveStateRight ? 5000 : -5000;
   end
 
-  reg [7:0] currentBit; // Current bit in the audioBuffer
-  initial begin
-    currentBit = 0;
-  end
+  // assign P1_9 = sqaureWaveState; // debug output
 
 
-  reg [7:0] sampleNumber; // Current sample number (max of 255 for bitbyte attempt)
-  initial begin
-    sampleNumber = 0;
-  end
-
-  // Bind something to the debug leds:
-  assign debugLEDs = ~currentBit; 
+  // Once we have some clocks set up, we will sample the audio waveform into these buffers, at the sample rate (44.1kHz).
+  // This will avoid glitches caused by changing the value of a sample right in the middle of pushing samples to I2S.
+  reg signed [15:0] leftAudioBuffer;
+  reg signed [15:0] rightAudioBuffer; // TODO: Make our i2sOutput module handle stereo audio data
 
 
 
-  // Generate BCK from system clock
-  // Our system `clk` is 6MHz
+
+
+
+
+
+
+
+
+
+  // Main audio clock generation - BCK and Primary Sampling clock
   //
-  // At first, we think we'd want a bit clock of something like: Sample Rate * Bit Depth * # of channels
+  // We would like to use the same clock for generating waveform samples and for I2S audio output. The sample rate clock will be
+  // slower than the bit clock, so we should start with the bit clock and go from there.
+  
+  // Bit clock:
+  // Picking a useful BCK has some considerations. Tl;dr: It's frequency should be at least `Sample Rate * Bit Depth * Channels`:
   //  e.g. 44.1kHz * 16 * 2 = 1411200
   //
   // However, that means exactly 16 bits (bit depth) of data would be clocked in per channel, per frame.
@@ -229,78 +205,149 @@ module i2sOutput(
   //
   // Maybe this detail is exactly why I2S doesn't use left-justified data? Moving on...
   //
-  reg [24:0] bckCounter;
-  wire [24:0] bckInc = bckCounter[24] ? (1411200) : (1411200 - 6000000);
-  wire [24:0] bckN = bckCounter + bckInc;
-  always @(posedge clk)
-  begin
-    bckCounter = bckN;
-  end
-  wire bck_clk = ~bckCounter[24];  // clock B tick whenever d[24] is zero
+  wire bitClockPulses;
+  adjustableClock bitClockTimer(clk, 6000000, 1411200, bitClockPulses);
+  // adjustableClock bitClockTimer(clk, 6000000, 2000000, bitClockPulses); // Speed up bit clock to fix alignment issues
 
-  // Convert bck_clk pulse chain into a toggling clock value for BCK output
-  reg i2s_bck_state;
+  // Convert bitClockPulses into a correctly toggling BCK clock signal
+  reg bitClock;
   initial begin
-    i2s_bck_state = 0;
+    bitClock = 0;
   end
-  always @(posedge bck_clk)
+  always @(posedge bitClockPulses)
   begin
-    // This is NOT the right place to increment the currentBit
-    i2s_bck_state <= !i2s_bck_state;
+    bitClock <= !bitClock;
   end
 
-  // The i2s_bck_state rises 16 times every frame
-  always @(negedge i2s_bck_state)
+  // Primary Sampling clock:
+  // 
+  // Derive the sample clock from the BCK to keep them aligned and attempt to reduce jitter:
+  // Note: Because pulses need to be converted to 50/50 duty cycle for I2S LCK to be valid, we need to double
+  // the sample rate here so we can then divide it cleanly into 44100 Hz 
+  wire sampleClockPulses;
+  adjustableClock sampleClockTimer(bitClock, 1411200, 88200, sampleClockPulses);
+  // adjustableClock sampleClockTimer(bitClock, 2000000, 88200, sampleClockPulses);  // Speed up bit clock to fix alignment issues
+
+  // Convert sampleClockPulses into a correctly toggling sample rate clock signal
+  reg sampleClock;
+  initial begin
+    sampleClock = 0;
+  end
+  always @(posedge sampleClockPulses)
   begin
-    currentBit <= currentBit + 1;
+    sampleClock <= !sampleClock;
   end
 
-  // Output the current bit value for this frame's sample on DIN pin:
+  // Now that we have clocks, we can sample the audio waveform into the left and right audio buffers!:
+  always @(posedge sampleClock)
+  begin
+    leftAudioBuffer = squareWave;
+    rightAudioBuffer = squareWaveRight;
+  end
+
+  // Send sampled square wave audio values to i2sOutput module instance:
+  i2sOutput audio(bitClock, sampleClock, leftAudioBuffer, rightAudioBuffer, P1_4, P1_3, P1_2, pmod_led_pins);
+
+endmodule
+
+
+
+
+//
+// I2S Output module
+//
+// This Verilog module was designed to work with the PCM5100 series audio DACs that can be found on cheap
+// breakout booards. By chance or design, the board I found happened to be compatible with the PMOD pin
+// layout.
+//
+// This module has not been tested with other I2S DACs but the Adafruit I2S Stereo Decoder (UDA1334A) has
+// a high chance of working. Note that the Adafruit board closely followed the datasheet reference design
+// and thus the filter values have been found to reduce the quality of the audio output.
+//
+// Here are the PCM5100 pins:
+//
+// VIN - 3.3v MAX!
+// GND - Analog and Digital grounds are tied together
+// LCK - Audio data left-right clock/frame/word select; Frequency should be the sample rate (e.g. 44.1kHz)
+// DIN - Audio data input; binary 2s complement, MSB-first, signed
+// BCK - Audio data bit clock; Frequnecy should be: Sample Rate * Bit Depth * 2 (e.g. 44.1kHz * 16 * 2)
+// SCK - System clock input; UNUSED!; tied low, the PCM5021 tries using BCK and a PLL to generate SCK
+//
+module i2sOutput(
+  input bitClock, // Primary bit clock input; used for logic and output to BCK I2S pin
+  input sampleClock, // primary sample rate clock; used for logic and output to LCK I2S pin
+
+  // Sampled audio data as signed, 2s complement, MSB-first values
+  input [15:0] leftAudioData,
+  input [15:0] rightAudioData,
+
+  output P1_4, output P1_3, output P1_2, // I2S output pins; LCK, DIN, BCK respectively
+  output [7:0] debugLEDs // A register where we can drop some debugging output from the I2S module
+);
+
+  reg [7:0] currentBit; // Index for the next bit in the current sample
+  initial begin
+    currentBit = 12'hff;
+  end
+
+  reg [7:0] frameCounter; // Current frame number (max of 255 for maybe bitbyte?)
+  initial begin
+    frameCounter = 0;
+  end
+
+  // Bind something to the debug leds:
+  assign debugLEDs = ~leftAudioData; 
+  // assign debugLEDs = ~currentBit; 
+
+  // The bitClock rises 16 times every frame (assuming 16 bits per sample)
+  always @(posedge bitClock)
+  begin
+    currentBit <= currentBit + 1; // Increment the bit selection index 
+  end
+
+  // Output a bit for the current sample to DIN:
   // Because we need the data as MSB first, we subtract the current bit index from one less than the Bit Rate (15 in this case)
-  assign P1_3 = audioData[30-currentBit]; // DIN
+  assign P1_3 = currentChannel == 0 ? leftAudioData[15-currentBit] : rightAudioData[15-currentBit]; // DIN
 
-  // Output BCK
-  assign P1_2 = i2s_bck_state; // BCK
+  // Output bit clock to the correct PMOD1 pin for BCK:
+  assign P1_2 = ~bitClock;
 
+  // Output sampleClock to the correct PMOD1 pin for LCK:
+  assign P1_4 = ~sampleClock;
 
-  // Generate an arbitrary LCK/sample rate clock from BCK
-  // Remember: These clocks "tick" in pulses, not edges.
-  //
-  // We want a 44100Hz sample rate (LRCK/word select clock). And our BCK is 1411200 Hz.
-  // When LCK is low, we're outputing the sample for the left channel. So falling edge represents moving to a new "frame"
-  reg [24:0] d;
-  wire [24:0] dInc = d[24] ? (44100) : (44100 - 1411200);
-  wire [24:0] dN = d + dInc;
-  always @(posedge bck_clk)
+  // When LCK is low, I2S is expecting the sample data for the left channel. High means right channel.
+  // Therefore, a rising edge means we should start outputting the bits for the right channel...
+  reg currentChannel;
+  always @(sampleClock)
   begin
-    d = dN;
+    currentChannel = sampleClock; // 0 is Left, 1 is Right
   end
-  wire sample_rate_clk = ~d[24];  // clock B tick whenever d[24] is zero
-
-  // Convert pulse train to the expected LCK clock at the sample rate of 44.1 kHz
-  // Rising edge means we should start outputting the bits for the Right channel.
-  reg i2s_lrck_state;
-  initial begin
-    i2s_lrck_state = 0;
-  end
-  always @(posedge sample_rate_clk)
+  
+  // ... And a falling edge represents the start of a new "frame" where we'll start outputting bits for the left channel
+  always @(negedge sampleClock)
   begin
-    i2s_lrck_state <= !i2s_lrck_state;
-    //currentBit <= 1;
-    //audioBuffer <= audioBuffer + 1;
-  end
-
-  // Connect the clean 44.1kHz LCK to the correct output pin:
-  assign P1_4 = ~i2s_lrck_state; // LCK
-
-  // On falling edge, we're starting to process a new frame
-  always @(negedge i2s_lrck_state)
-  begin
-    sampleNumber <= sampleNumber + 1; // Increment the sampleNumber
+    frameCounter <= frameCounter + 1; // Keep track of the current frame (up to 255 frames)
   end
 
 
-endmodule // i2s
+endmodule // i2sOutput
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
